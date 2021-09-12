@@ -1,0 +1,50 @@
+一、需求介绍
+
+1.DAU
+        DAU(daily access user): 统计的是每日访问商城的设备数(日活)。
+
+        数据来源：   用户行为日志 startup_log
+
+        {
+            "common":
+            {"ar":"440000","ba":"Xiaomi","ch":"360","is_new":"1","md":"Xiaomi 9","mid":"mid_229","os":"Android 11.0","uid":"272","vc":"v2.1.134"},
+            "start":
+            {"entry":"icon","loading_time":14674,"open_ad_id":11,"open_ad_ms":4745,"open_ad_skip_ms":1297},
+            "ts":1630485347000
+        }
+
+
+        业务流程：
+                    ①从kafka中消费 启动日志
+                    ②将jsonstr 转换 为 样例类
+                    ③运算
+                            a) 执行同批次去重
+                            b) 跨批次去重
+                            c) 将当前批次要写入ES的启动日志的  日期 + 设备号 记录在数据库中
+                            d) 将启动日志写入hbase
+
+
+                    ⑤将 每个设备在一天中，启动时间最早的启动日志写入hbase
+
+2.JSON的解析
+       {
+                   "common":
+                   {"ar":"440000","ba":"Xiaomi","ch":"360","is_new":"1","md":"Xiaomi 9","mid":"mid_229",
+                   "os":"Android 11.0","uid":"272","vc":"v2.1.134"},
+                   "start":
+                   {"entry":"icon","loading_time":14674,"open_ad_id":11,"open_ad_ms":4745,"open_ad_skip_ms":1297},
+                   "ts":1630485347000
+               }
+
+        对应的样例类必须是：
+
+        StartUpLog{
+            var common: CommonInfo,
+            var start: StartLogInfo,
+            var ts:Long
+
+        }
+
+        取出：  {"ar":"440000","ba":"Xiaomi","ch":"360","is_new":"1","md":"Xiaomi 9","mid":"mid_229",
+                               "os":"Android 11.0","uid":"272","vc":"v2.1.134"}
+                封装到StartUpLog的属性上

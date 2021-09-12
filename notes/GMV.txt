@@ -1,0 +1,110 @@
+一、在Mysql中模拟业务数据
+
+        批量造业务数据： init_data`(do_date_string VARCHAR(20),order_incr_num INT,user_incr_num INT,if_truncate BOOLEAN)
+                            do_date_string： 模拟的数据的日期
+                            order_incr_num：  当前要生成多少笔订单
+                            user_incr_num： 当前要新增多少个用户
+                            if_truncate：   是否清空当前表后再写入数据
+
+        模拟业务数据：CALL `init_data`('2021-09-04',5,2,FALSE)
+
+
+二、使用Canal采集业务数据
+
+1.WAL (预写日志)
+    举例：    hbase ：  在向memstore写数据时，会将写操作记录在WAL日志中，以防memstore崩溃后，可以恢复数据。
+
+              namenode:  hadoop的一个进程，负责元数据的管理。当客户端发送写操作(删除文件，上传文件)，此时元数据记录在NN中。
+                            NN在启动后，会将写操作的元数据记录在 edits文件中，之后再定时，将edits文件中的元数据合并到 fsimage中。
+
+              redis：   redis开启AOF日志记录功能，可以将redis的写操作命令记录在 aof日志文件中。但是redis不不能称为 WA(之前)L
+                         WB(之后)L
+
+               Mysql ：  向mysql数据库写入数据之前，可以开启binlog记录功能，会将写操作命令，记录在 一种二进制的日志文件(binlog日志)中。
+
+2.体会binlog
+            sudo vim /etc/my.cnf
+
+            [mysqld]
+            log-bin=mysql-bin
+            binlog_format=statement|row(选择)
+            server-id = 1
+            binlog-do-db=210422test
+
+
+            日志记录的位置：  默认放在 msyql的家目录  /var/lib/mysql
+
+
+3.binlog-format
+            binlog的重要功能是主从复制。
+
+            主机将所有的写操作命令，记录在binlog日志中，从机拉取主机记录的binlog日志，读取日志，重建数据，保证和主机数据同步！
+
+            binlog-format开启binlog记录后，mysql写操作记录的格式。
+
+            支持三种设置：
+                  删除1号员工写操作
+                  将2号员工的工资更新为3000
+                    statement： 语句格式。将写操作的sql语句记录下来。
+                                    delete from xx where id = 1
+                                    update xxx set salary=3000 where id=2
+
+                                 优势：进行批处理时，节省日志占用的磁盘空间(简洁)
+
+                                 劣势： sql语句中，使用的函数，必须保证主机和从机都拥有！
+                                        只适用于 两个mysql的机器互相同步数据！
+
+
+                    row：行格式。记录的是写操作造成的行的变化情况
+                                    xxx表，id=1的这行，删除
+                                    xxx表，id=2的这行，salary列，更新前是xxx，更新后是3000
+
+                                    劣势：  批处理时，记录的内容较多
+
+                                    优势：  直接记录每一行数据的变化，因此如果binlog日志中，采取的是row格式的记录，那么
+                                            这种日志不能可以被mysql解析，还可以被其他框架解析！
+
+                                            场景更灵活，可以直接使用客户端读取mysql的binlog，解析后获取其中的数据变化！
+
+                    mixed： 二者混合使用。具体用什么格式由 存储引擎 自动选择
+
+
+4.canal
+①介绍
+    https://github.com/alibaba/canal
+
+②配置
+        canal.properties：
+                          canal.ip = hadoop103
+
+         instance.properties：
+                        #canal伪装的从机的id,id不能和mysql主机的id冲突
+                        canal.instance.mysql.slaveId=2
+
+                        # position info  从主机的哪个binlog文件的哪个位置开始订阅
+                       canal.instance.master.address=hadoop104:3306
+                       canal.instance.master.journal.name=mysql-bin.000013
+                       canal.instance.master.position=154
+
+
+                    ----------
+                    希望从mysql主机当前最新的位置拉取数据：  show master status(sql)查看最新位置是什么
+
+
+                    ---------
+                    为canal创建一个身份(从机权限)，让canal使用此身份连接主机
+
+                    GRANT SELECT, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'canal'@'%' IDENTIFIED BY 'canal';
+
+                    FLUSH PRIVILEGES;
+
+三、编写实时App消费业务数据
+
+CREATE TABLE `gmvstats` (
+  `create_date` varchar(10) NOT NULL,
+  `create_hour` varchar(10) NOT NULL,
+  `gmv` decimal(16,2) DEFAULT NULL,
+  PRIMARY KEY (`create_date`,`create_hour`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8
+
+四、发布数据接口

@@ -1,0 +1,44 @@
+ES Spark Support文档：https://www.elastic.co/guide/en/elasticsearch/hadoop/current/spark.html#spark
+
+ES Spark Configuration: https://www.elastic.co/guide/en/elasticsearch/hadoop/current/configuration.html
+
+一、需求分析
+
+需求：同一设备，5分钟内使用2个及以上不同账号登录且都增加了收货地址。
+
+达到以上要求则产生一条预警日志。
+并且同一设备，每分钟只记录一次预警。
+
+数据：用户行为
+            actions_log
+
+
+思路：
+        ①从Kafka中消费  actions_log 中的数据
+        ②将DS中的ConsumerRecord转换为样例类
+        ③计算
+                统计5分钟内的数据：  开窗，窗口范围为 5分钟
+                将5分钟内收到的数据，按照  ((mid,uid),log) 进行分组
+
+                ((mid,uid),Ieterable[log1,log2,log3...])
+                判断，每个设备上的每个用户，是否产生了增加收货地址的行为，如果产生，记录，否则不记录！
+
+                将产生了收获地址行为的设备，及相关的日志，再进行分组
+                (mid1, Ieterable[  Ieterable[tom_log1,tom_log2] , Ieterable[Mike_log1,Mike_log2],.... ])
+
+                 (mid2, Ieterable[  Ieterable[tom_log1,tom_log2] )
+
+                判断这个设备最近5分钟是不是登录了超过2个及以上不同账号
+
+                基于以下信息产生预警日志！
+                 (mid1, Ieterable[  Ieterable[tom_log1,tom_log2] , Ieterable[Mike_log1,Mike_log2],.... ])
+
+         ④存储： 写入ES
+         ⑤可视化：  不发布数据接口，直接使用kibana的作图功能，可视化
+
+
+         并且同一设备，每分钟只记录一次预警:
+                mid1_2021-08-07 01:01:50, log1
+                mid1_2021-08-07 01:01:55, log2
+
+               id: mid1_2021-08-07 01:01

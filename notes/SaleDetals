@@ -1,0 +1,118 @@
+一、灵活分析需求
+
+1.数据来源
+        来自业务数据
+
+        order_detail： 订单明细
+
+        user_info：用户明细
+
+        无法直接关联，需要借助第三张表order_info关联
+
+
+        SQL:
+                    select
+
+                        ui.*,od.*
+                    from order_info oi join  order_detail od
+                    join user_info ui
+                    on oi.id = od.order_id
+                    on oi.user_id = ui.id
+
+2.流程
+            ① 使用canal client采集 三表的数据到kafka
+                    order_detail： 事物型事实表(只允许插入，不允许更新)
+                                        insert
+                    user_info：  insert | update
+
+                    order_info：     要的是user_id。 只涉及insert
+
+
+
+            ②编写实时app，从kafka消费 三表的数据
+            order_detail  和  order_info ： 下单后，Java业务系统，先在订单表生成订单数据，之后在订单明细表生成明细数据，这两步操作
+                        一定是在一个事务中完成！
+                         order_detail  和  order_info 的数据是几乎同时Insert
+
+
+            user_info：  在关联时，一笔订单的用户，时历史用户，但是不确定是哪天注册的！
+                            只能关联全量用户表，才能找到用户的信息！
+
+                  全量用户保存在哪里？
+                            msyql：  全量用户
+
+                            kafka：  新产生的用户
+
+
+                         将全量用户，保存到redis(性能强)中一份！
+                                方式一： 写一个批处理程序，读取mysql中的数据，写入redis
+
+                                方式二： 如果java业务系统，从一上线就启动binlog备份，可以使用canal
+                                        从java业务系统上线位置的binlog一直采集，也可以采集全量用户，到kafka
+                                        编写消费者，将kakfa的数据，消费，写入redis！
+
+
+                  Redis中的K-V：
+
+                        K：     user： + user_id
+
+                        V：
+                                集合不合适，将来关联时，只能从集合中通过遍历的方式取用户信息，效率低
+                                单值： string
+
+
+
+
+
+
+            ③两两关联
+                    order_info  关联  order_detail : 为每个订单详情，关联user_id
+                    关联后的结果  关联  user_info ： 使用user_id关联 user_info
+
+
+                    双流Join Join不上的原因：  两个流要Join的数据无法在同一个批次到达！
+
+                    解决：   Join + 缓存
+                                    能在当前批次Join上的，就Join，Join不上的就去缓存中等待后续批次！
+
+                    处理步骤：
+
+                            order_info 和 order_detail 是 1对N的关系
+                                order_info :
+                                                 每个批次都需要：
+                                                    a) 和当前批次能关联上的order_detail关联
+                                                    b) 无条件写入 redis
+                                                               不确定后续批次是否还有同一笔单的order-detail
+
+                                                             K:     orderinfo: + orderid
+
+                                                             v:
+                                                                    集合： 一批OrderInfo 写入一个 Set,
+                                                                            需要在取出OrderInfo时遍历Set，效率低
+
+                                                                    采取： String
+
+                                                    c) 到redis找，是否有早到的order_detail，找到就关联
+
+                                order_detail:
+                                                每个批次都需要：
+                                                     a) 和当前批次能关联上的order_info关联
+
+                                                     b) 到redis找，是否有早到的order_info，找到就关联
+
+                                                     c)  如果b找不到，说明当前的order_detail来早了，就自己写入redis
+                                                            等待后续到达的order_info
+
+                                                            K：  orderdetail: + orderId
+
+                                                            V：  集合(选择):  一笔订单的订单详情 是一个 K-V
+
+                                                                  单值：  一个订单详情是一个K-V
+
+
+                        将数据写入缓存中时，可以设置数据的存活时间：  压力测试的极端时间  * 2
+
+
+            ④将关联后的订单详情(有用户信息，购物明细)写入 ES
+
+            ⑤发布数据接口
